@@ -699,6 +699,11 @@ where
 pub trait ViewRef: View {
     /// Borrow the element at `index`.
     fn at_ref(&self, index: Self::I) -> &Self::T;
+
+    fn iter(&self) -> Iter<<<Self as View>::I as Index>::Size, <Self as View>::I, Self> {
+        let index_iter = Self::I::iter(self.size());
+        Iter { index_iter, view: self }
+    }
 }
 
 /// A [`View`] that is backed by mutable memory.
@@ -713,6 +718,14 @@ pub trait ViewRef: View {
 pub trait ViewMut: ViewRef {
     /// Mutably borrow the element at `index`.
     fn at_mut(&mut self, index: Self::I) -> &mut Self::T;
+
+    /// # Safety
+    /// 
+    /// It's only safe if different indices always refer to different data
+    unsafe fn iter_mut(&mut self) -> IterMut<<<Self as View>::I as Index>::Size, <Self as View>::I, Self> {
+        let index_iter = Self::I::iter(self.size());
+        IterMut { index_iter, view: self }
+    }
 }
 
 impl<T: Deref> ViewRef for T where <T as Deref>::Target: ViewRef {
@@ -723,6 +736,46 @@ impl<T: Deref> ViewRef for T where <T as Deref>::Target: ViewRef {
 impl<T: DerefMut> ViewMut for T where <T as Deref>::Target: ViewMut {
     #[inline(always)]
     fn at_mut(&mut self, index: Self::I) -> &mut Self::T { (**self).at_mut(index) }
+}
+
+pub struct Iter<'a, S, I, V> {
+    index_iter: crate::index::Iter<S, I>,
+    view: &'a V,
+}
+impl<'a, S, I, V> Iterator for Iter<'a, S, I, V>
+where
+    S: crate::Size,
+    I: Index<Size = S>,
+    V: ViewRef<I = I>,
+{
+    type Item = &'a V::T;
+    fn next(&mut self) -> Option<Self::Item> {
+        let Some(i) = self.index_iter.next() else {
+            return None;
+        };
+        Some(self.view.at_ref(i))
+    }
+}
+
+pub struct IterMut<'a, S, I, V> {
+    index_iter: crate::index::Iter<S, I>,
+    view: &'a mut V,
+}
+impl<'a, S, I, V> Iterator for IterMut<'a, S, I, V>
+where
+    S: crate::Size,
+    I: Index<Size = S>,
+    V: ViewMut<I = I>,
+{
+    type Item = &'a mut V::T;
+    fn next(&mut self) -> Option<Self::Item> {
+        let Some(i) = self.index_iter.next() else {
+            return None;
+        };
+        let ptr = self.view.at_mut(i) as *mut _;
+        // SAFETY: `ViewMut::iter_mut()` has guaranteed that different indices always refer to different data
+        Some(unsafe { &mut *ptr })
+    }
 }
 
 /// A helper macro for implementing [`ViewRef`] and [`ViewMut`].
